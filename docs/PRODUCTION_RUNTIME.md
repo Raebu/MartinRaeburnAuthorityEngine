@@ -167,3 +167,63 @@ The command centre shows:
 - discovery coverage
 
 For pending outreach, Martin can explicitly **Approve & send** or **Reject** from the command centre. Approve & send uses the same hardened production Authority API, so suppression, idempotency, rate limits and recipient cooling rules still apply.
+
+
+## Authority intelligence optimisation
+
+The production engine now includes an `authority-intelligence` runtime for the optimisation layer.
+
+### Mentions and backlink intelligence
+
+Every six hours the engine searches for public mentions of Martin Raeburn and related authority references. Candidates are independently verified against the source page before they are stored.
+
+The system tracks whether each mention links back to martinraeburn.com or another Raeburn property so unlinked mentions can be treated as backlink opportunities rather than being mixed with already-linked coverage.
+
+The first production pass identified verified references including LinkedIn and Raeburn Consulting pages, with unlinked references surfaced for review.
+
+### Relationship intelligence
+
+Every six hours the engine refreshes a relationship score for known contacts using factual interaction signals including sent outreach, delivery, replies and prepared meetings. Scores are stored in contact metadata and a relationship-signal audit trail.
+
+### Opportunity freshness
+
+Every six hours the highest-priority live opportunities are revalidated against their original source URLs. Passed deadlines become `expired`; 404/410 sources become `source_unavailable`; healthy sources receive a revalidation timestamp.
+
+The first production revalidation processed 22 active high-value opportunities: all 22 source pages were healthy.
+
+### Conversion intelligence
+
+A daily funnel snapshot records:
+- opportunities discovered
+- opportunities qualified
+- verified contacts
+- awaiting-approval opportunities
+- outreach sent
+- replies
+- qualification rate
+- reply rate
+- mentions / linked mentions / unlinked mentions
+- per-source qualification rate
+
+This allows future source weighting and discovery strategy to be based on actual conversion rather than raw volume.
+
+The first snapshot measured 197 opportunities discovered and 17 qualified over the initial 30-day window. Sessionize and Civo currently show the strongest observed source qualification rate in the small early dataset.
+
+### Meeting briefs
+
+The Authority Engine now has a production meeting-brief endpoint. Calendar events can be enriched with known contacts, organizations, outreach and opportunity history and turned into an evidence-only executive brief containing:
+- objective
+- relationship summary
+- relevant history
+- talking points
+- questions to ask
+- risks / unknowns
+- desired next step
+
+A live brief was successfully prepared for the confirmed UKHarvest / EGNA Highbridge Farm meeting from Martin's business calendar.
+
+### Search Console ingestion
+
+A production `search-console-ingest` action is available for Search Console rows. The schema supports query/page/country/device dimensions plus clicks, impressions, CTR and average position, and the command centre displays the latest 28-day visibility totals.
+
+The GSC Wizard ChatGPT integration is connected for account-side Search Console analysis. Its ChatGPT OAuth connection is intentionally not copied into the Supabase backend. For continuous server-side ingestion, a separate production Google OAuth/service-account credential must be provisioned to the Authority Engine.
