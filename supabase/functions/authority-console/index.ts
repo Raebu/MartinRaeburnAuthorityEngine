@@ -54,7 +54,7 @@ async function dashboardData(){
 
   const [
     oppNew,oppQualified,oppAwaiting,approvals,outreach,replies,siteFailures,
-    opportunities,approvalRows,recentOutreach,jobs,site,searches,mentions,meetings,relationships,searchTotals
+    opportunities,approvalRows,recentOutreach,jobs,site,searches,mentions,meetings,relationships,searchTotals,vitals
   ]=await Promise.all([
     db.from("opportunities").select("*",{count:"exact",head:true}).eq("status","new"),
     db.from("opportunities").select("*",{count:"exact",head:true}).eq("status","qualified"),
@@ -72,7 +72,8 @@ async function dashboardData(){
     db.from("mentions").select("entity_name,source_title,source_domain,mention_type,has_link,target_url,authority_score,status,source_url,last_seen_at").order("authority_score",{ascending:false}).order("last_seen_at",{ascending:false}).limit(30),
     db.from("meeting_briefs").select("id,title,starts_at,attendees,status,brief,updated_at").order("starts_at",{ascending:true}).limit(12),
     db.from("contacts").select("id,name,email,role,metadata,organization_id").order("updated_at",{ascending:false}).limit(30),
-    db.from("search_metrics").select("clicks,impressions,ctr,position,metric_date").gte("metric_date",new Date(Date.now()-28*86400000).toISOString().slice(0,10))
+    db.from("search_metrics").select("clicks,impressions,ctr,position,metric_date").gte("metric_date",new Date(Date.now()-28*86400000).toISOString().slice(0,10)),
+    db.from("web_vitals").select("page_path,observed_at,cls,lcp_ms,inp_ms,fcp_ms,ttfb_ms,viewport_width").gte("observed_at",since7).order("observed_at",{ascending:false}).limit(2000)
   ]);
 
   const approvalTargets=(approvalRows.data??[]).map((a:any)=>a.target_id).filter(Boolean);
@@ -90,6 +91,29 @@ async function dashboardData(){
     const o=outreachById[a.target_id];
     return {...a,outreach:o??null,opportunity:o?oppById[o.opportunity_id]??null:null};
   });
+
+  const vitalRows=vitals.data??[];
+  const percentile=(values:number[],p=.75)=>{
+    const xs=values.filter(Number.isFinite).sort((a,b)=>a-b);
+    if(!xs.length)return null;
+    return xs[Math.min(xs.length-1,Math.floor((xs.length-1)*p))];
+  };
+  const byPage:any={};
+  for(const r of vitalRows){
+    const k=r.page_path||"/";
+    byPage[k]??={page_path:k,samples:0,lcp:[],inp:[],cls:[],ttfb:[],mobile:0};
+    const x=byPage[k];x.samples++;
+    if(r.lcp_ms!=null)x.lcp.push(Number(r.lcp_ms));
+    if(r.inp_ms!=null)x.inp.push(Number(r.inp_ms));
+    if(r.cls!=null)x.cls.push(Number(r.cls));
+    if(r.ttfb_ms!=null)x.ttfb.push(Number(r.ttfb_ms));
+    if(Number(r.viewport_width??9999)<=768)x.mobile++;
+  }
+  const webVitals=Object.values(byPage).map((x:any)=>({
+    page_path:x.page_path,samples:x.samples,mobile_samples:x.mobile,
+    p75_lcp_ms:percentile(x.lcp),p75_inp_ms:percentile(x.inp),
+    p75_cls:percentile(x.cls),p75_ttfb_ms:percentile(x.ttfb)
+  })).sort((a:any,b:any)=>b.samples-a.samples);
 
   return {
     generated_at:new Date().toISOString(),
@@ -115,6 +139,7 @@ async function dashboardData(){
       relationship_score:Number(x.metadata?.relationship_score??0),
       relationship_updated_at:x.metadata?.relationship_updated_at??null
     })).sort((a:any,b:any)=>b.relationship_score-a.relationship_score),
+    web_vitals:webVitals,
     search_summary:(searchTotals.data??[]).reduce((acc:any,row:any)=>{
       acc.clicks+=Number(row.clicks??0);
       acc.impressions+=Number(row.impressions??0);
@@ -165,6 +190,7 @@ button{background:#213047;color:white;border:1px solid #3a4e68;border-radius:8px
   <div class="panel"><h2>Relationship intelligence</h2><div id="relationships"></div></div>
   <div class="panel"><h2>Meeting briefs</h2><div id="meetings"></div></div>
   <div class="panel"><h2>Search visibility</h2><div id="searchmetrics"></div></div>
+  <div class="panel"><h2>Real-user performance</h2><div id="webvitals"></div></div>
   <div class="panel"><h2>Discovery coverage</h2><div id="searches"></div></div>
 </div>
 <script>
@@ -199,6 +225,8 @@ async function refresh(){
   document.getElementById("relationships").innerHTML=d.relationships.length?table(["Score","Contact","Role","Email"],d.relationships.slice(0,20).map(r=>'<tr><td class="score">'+esc(r.relationship_score)+'</td><td>'+esc(r.name)+'</td><td>'+esc(r.role||"")+'</td><td>'+esc(r.email||"")+'</td></tr>')):'<div class="sub">Relationship scores will appear as conversations develop.</div>';
   document.getElementById("meetings").innerHTML=d.meetings.length?table(["When","Meeting","Status","Objective"],d.meetings.map(m=>'<tr><td>'+esc(m.starts_at?new Date(m.starts_at).toLocaleString():"")+'</td><td>'+esc(m.title)+'</td><td>'+esc(m.status)+'</td><td>'+esc(m.brief?.objective||"")+'</td></tr>')):'<div class="sub">No meeting briefs prepared yet.</div>';
   const sm=d.search_summary||{clicks:0,impressions:0,positions:[]}; const avg=sm.positions?.length?(sm.positions.reduce((a,b)=>a+b,0)/sm.positions.length).toFixed(1):"—";
+  const vf=(v,good,unit="")=>v==null?"—":'<span class="'+(Number(v)<=good?"good":"bad")+'">'+esc(Number(v).toFixed(unit==="CLS"?3:0))+esc(unit==="CLS"?"":unit)+'</span>';
+  document.getElementById("webvitals").innerHTML=d.web_vitals?.length?table(["Page","Samples","Mobile","p75 LCP","p75 INP","p75 CLS","p75 TTFB"],d.web_vitals.slice(0,20).map(v=>'<tr><td>'+esc(v.page_path)+'</td><td>'+esc(v.samples)+'</td><td>'+esc(v.mobile_samples)+'</td><td>'+vf(v.p75_lcp_ms,2500,"ms")+'</td><td>'+vf(v.p75_inp_ms,200,"ms")+'</td><td>'+vf(v.p75_cls,0.1,"CLS")+'</td><td>'+vf(v.p75_ttfb_ms,800,"ms")+'</td></tr>')):'<div class="sub">Real-user Core Web Vitals will appear after production traffic is collected.</div>';
   document.getElementById("searchmetrics").innerHTML='<div class="grid" style="grid-template-columns:repeat(3,minmax(120px,1fr));margin:0"><div class="card"><div class="n">'+esc(sm.clicks)+'</div><div class="label">Clicks / 28d</div></div><div class="card"><div class="n">'+esc(sm.impressions)+'</div><div class="label">Impressions / 28d</div></div><div class="card"><div class="n">'+esc(avg)+'</div><div class="label">Avg position</div></div></div>';
   document.getElementById("searches").innerHTML=table(["Category","Query","Priority","Last run"],d.searches.map(s=>'<tr><td>'+esc(s.category)+'</td><td>'+esc(s.query)+'</td><td>'+esc(s.priority)+'</td><td>'+esc(s.last_run_at?new Date(s.last_run_at).toLocaleString():"Never")+'</td></tr>'));
 }
