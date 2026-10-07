@@ -62,3 +62,30 @@ Each outreach uses a stable Resend idempotency key derived from its outreach ID,
 Recipient addresses are validated before drafts are persisted. Suppression matching is case-insensitive. Existing contact-linked drafts are backfilled with recipient addresses where possible.
 
 After provider acceptance, the engine checks that sent state was persisted before returning success. Database/control-plane failures fail closed rather than authorising additional sends.
+
+
+## Resend delivery and reply automation
+
+The production Resend account now sends lifecycle events to the `authority-events` Supabase Edge Function.
+
+Subscribed events:
+- delivered
+- delivery delayed
+- bounced
+- complained
+- suppressed
+- failed
+- received
+
+Webhook payloads are verified with the provider signing secret before processing. The signing secret is stored in Supabase Vault, not in source control.
+
+Current automatic reactions:
+- successful deliveries are written to the outreach audit trail
+- replies mark the related opportunity as replied
+- pending follow-ups stop immediately when a reply is received
+- bounces, complaints, suppressions and failures stop follow-ups
+- affected recipients are added to the suppression list
+- delivery issues update the opportunity state for review
+- all received provider events are stored in `email_events` for traceability
+
+The webhook signature verifier was tested using a signed synthetic event. A synthetic reply test also confirmed that a pending follow-up is automatically completed when a reply is detected; test records were then removed from production data.
