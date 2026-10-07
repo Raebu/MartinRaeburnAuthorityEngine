@@ -10,7 +10,7 @@ export async function buildApp() {
   });
   await app.register(cors,{origin:false});
   await registerRoutes(app);
-  app.setErrorHandler((err,_req,reply)=>{
+  app.setErrorHandler((err:any,_req,reply)=>{
     const code=(err as any).statusCode && Number((err as any).statusCode)>=400 ? Number((err as any).statusCode) : 500;
     reply.code(code).send({error:code===500?"Internal server error":err.message});
   });
