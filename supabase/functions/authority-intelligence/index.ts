@@ -434,6 +434,47 @@ async function runOpportunityRevalidation(){
   return{processed:(items??[]).length,healthy,expired,unavailable,failed};
 }
 
+function finiteMetric(value:unknown,max:number){
+  const n=Number(value);
+  return Number.isFinite(n)&&n>=0&&n<=max?n:null;
+}
+async function ingestWebVitals(body:any){
+  const policy=await setting("web_vitals_policy")??{enabled:true,thresholds:{lcp_ms:2500,inp_ms:200,cls:0.1,ttfb_ms:800}};
+  if(policy.enabled===false)return json({disabled:true});
+
+  const path=String(body.path??"/").trim();
+  if(!path.startsWith("/")||path.length>300)return json({error:"invalid path"},400);
+  const viewport=Array.isArray(body.viewport)?body.viewport:[];
+  const metrics=body.metrics&&typeof body.metrics==="object"?body.metrics:{};
+  const row={
+    observed_at:new Date(Number(body.ts)||Date.now()).toISOString(),
+    page_path:path,
+    viewport_width:finiteMetric(viewport[0],10000),
+    viewport_height:finiteMetric(viewport[1],10000),
+    device_pixel_ratio:finiteMetric(body.dpr,10),
+    effective_connection_type:String(body.connection?.effectiveType??"").slice(0,32)||null,
+    save_data:Boolean(body.connection?.saveData),
+    cls:finiteMetric(metrics.CLS,10),
+    lcp_ms:finiteMetric(metrics.LCP,120000),
+    inp_ms:finiteMetric(metrics.INP,120000),
+    fcp_ms:finiteMetric(metrics.FCP,120000),
+    ttfb_ms:finiteMetric(metrics.TTFB,120000),
+    source:"martinraeburn.com",
+    raw_data:{host:String(body.host??"").slice(0,255)}
+  };
+  const {error}=await db.from("web_vitals").insert(row);
+  if(error)throw error;
+
+  const t=policy.thresholds??{};
+  const alerts:any[]=[];
+  if(row.lcp_ms!=null&&row.lcp_ms>Number(t.lcp_ms??2500))alerts.push({metric:"LCP",value:row.lcp_ms,threshold:Number(t.lcp_ms??2500)});
+  if(row.inp_ms!=null&&row.inp_ms>Number(t.inp_ms??200))alerts.push({metric:"INP",value:row.inp_ms,threshold:Number(t.inp_ms??200)});
+  if(row.cls!=null&&row.cls>Number(t.cls??0.1))alerts.push({metric:"CLS",value:row.cls,threshold:Number(t.cls??0.1)});
+  if(row.ttfb_ms!=null&&row.ttfb_ms>Number(t.ttfb_ms??800))alerts.push({metric:"TTFB",value:row.ttfb_ms,threshold:Number(t.ttfb_ms??800)});
+
+  return json({stored:true,alerts});
+}
+
 Deno.serve(async(req:Request)=>{
   if(req.method==="GET")return json({ok:true,service:"authority-intelligence"});
   if(!(await authorised(req)))return json({error:"unauthorized"},401);
@@ -446,6 +487,7 @@ Deno.serve(async(req:Request)=>{
     if(body.action==="revalidate-opportunities")return json(await runOpportunityRevalidation());
     if(body.action==="meeting-brief")return await prepareMeetingBrief(body);
     if(body.action==="search-console-ingest")return await ingestSearchMetrics(body);
+    if(body.action==="web-vitals-ingest")return await ingestWebVitals(body);
     return json({error:"unknown action"},400);
   }catch(e){
     return json({error:"intelligence job failed",detail:e instanceof Error?e.message:String(e)},500);
