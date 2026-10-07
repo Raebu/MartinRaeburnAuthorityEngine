@@ -34,6 +34,12 @@ async function authorised(req:Request){
   const digest=await sha256(supplied);
   return digest===api?.sha256||digest===job?.sha256;
 }
+async function vitalsAuthorised(req:Request){
+  const supplied=req.headers.get("x-vitals-key");
+  if(!supplied)return false;
+  const cfg=await setting("vitals_ingest_key_sha256");
+  return (await sha256(supplied))===cfg?.sha256;
+}
 async function openaiStructured(name:string,schema:any,instructions:string,input:any,useWeb=false){
   const key=await secret("openai_api_key");
   const ai=await setting("ai_model");
@@ -477,9 +483,13 @@ async function ingestWebVitals(body:any){
 
 Deno.serve(async(req:Request)=>{
   if(req.method==="GET")return json({ok:true,service:"authority-intelligence"});
-  if(!(await authorised(req)))return json({error:"unauthorized"},401);
   if(req.method!=="POST")return json({error:"method not allowed"},405);
   const body=await req.json().catch(()=>({}));
+  if(body.action==="web-vitals-ingest"){
+    if(!(await vitalsAuthorised(req)))return json({error:"unauthorized"},401);
+    try{return await ingestWebVitals(body)}catch(e){return json({error:"intelligence job failed",detail:e instanceof Error?e.message:String(e)},500)}
+  }
+  if(!(await authorised(req)))return json({error:"unauthorized"},401);
   try{
     if(body.action==="mentions")return json(await runMentions());
     if(body.action==="relationship-refresh")return json(await runRelationshipRefresh());
@@ -487,7 +497,6 @@ Deno.serve(async(req:Request)=>{
     if(body.action==="revalidate-opportunities")return json(await runOpportunityRevalidation());
     if(body.action==="meeting-brief")return await prepareMeetingBrief(body);
     if(body.action==="search-console-ingest")return await ingestSearchMetrics(body);
-    if(body.action==="web-vitals-ingest")return await ingestWebVitals(body);
     return json({error:"unknown action"},400);
   }catch(e){
     return json({error:"intelligence job failed",detail:e instanceof Error?e.message:String(e)},500);
