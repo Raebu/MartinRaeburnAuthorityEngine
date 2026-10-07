@@ -12,6 +12,7 @@ The Authority Engine production data plane currently runs in Supabase project `p
 - 30-minute site-health monitoring
 - 3-hour opportunity-source polling
 - 6-hour AI opportunity qualification
+- approval-gated outbound email from `contact@martinraeburn.com`
 
 ## Schedules
 
@@ -40,7 +41,7 @@ AI-assisted inbound classification and approval-gated outreach drafting are live
 
 Opportunity discovery now applies stricter freshness and intent filters, while a separate AI qualification job runs every six hours. Curated high-fit UK speaking opportunities are stored as qualified records.
 
-Outbound email delivery is still disabled until a verified `martinraeburn.com` sending path is available.
+Outbound email delivery is live through the verified `martinraeburn.com` Resend domain. The runtime uses a sending-only domain-restricted API credential stored in Supabase Vault. Sending remains approval-gated, suppression-aware, rate-limited to 5/hour and 20/day by default, and applies a 14-day recipient cooling-off period.
 
 ## Vercel
 
