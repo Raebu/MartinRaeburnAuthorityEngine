@@ -11,6 +11,7 @@ The Authority Engine production data plane currently runs in Supabase project `p
 - Supabase Vault for scheduler/API credentials
 - 30-minute site-health monitoring
 - 3-hour opportunity-source polling
+- 6-hour AI opportunity qualification
 
 ## Schedules
 
@@ -35,7 +36,11 @@ Site monitoring is live and has completed successfully against the primary marti
 
 Discovery infrastructure is live. Initial generic RSS sources are seeded, but source adapters still need expanding before opportunity discovery should be treated as production-quality.
 
-AI-assisted classification/drafting and outbound email remain disabled until runtime credentials are provisioned. High-impact outbound actions remain approval-gated by design.
+AI-assisted inbound classification and approval-gated outreach drafting are live using a dedicated OpenAI API key stored in Supabase Vault. The production model is `gpt-5.6-luna` for cost-sensitive high-volume triage. High-impact outbound actions remain approval-gated by design.
+
+Opportunity discovery now applies stricter freshness and intent filters, while a separate AI qualification job runs every six hours. Curated high-fit UK speaking opportunities are stored as qualified records.
+
+Outbound email delivery is still disabled until a verified `martinraeburn.com` sending path is available.
 
 ## Vercel
 
