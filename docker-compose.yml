@@ -1,0 +1,23 @@
+services:
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_DB: authority
+      POSTGRES_USER: authority
+      POSTGRES_PASSWORD: authority
+    ports:
+      - "5432:5432"
+    volumes:
+      - authority_pg:/var/lib/postgresql/data
+      - ./db/migrations:/docker-entrypoint-initdb.d:ro
+
+  api:
+    build: .
+    env_file: .env
+    depends_on:
+      - postgres
+    ports:
+      - "8080:8080"
+
+volumes:
+  authority_pg:
