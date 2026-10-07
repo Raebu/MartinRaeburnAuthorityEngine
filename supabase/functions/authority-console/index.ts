@@ -54,7 +54,7 @@ async function dashboardData(){
 
   const [
     oppNew,oppQualified,oppAwaiting,approvals,outreach,replies,siteFailures,
-    opportunities,approvalRows,recentOutreach,jobs,site,searches
+    opportunities,approvalRows,recentOutreach,jobs,site,searches,mentions,meetings,relationships,searchTotals
   ]=await Promise.all([
     db.from("opportunities").select("*",{count:"exact",head:true}).eq("status","new"),
     db.from("opportunities").select("*",{count:"exact",head:true}).eq("status","qualified"),
@@ -68,7 +68,11 @@ async function dashboardData(){
     db.from("outreach").select("id,opportunity_id,contact_id,recipient_email,subject,status,sent_at,reply_received_at,last_delivery_event,provider_message_id,created_at").order("created_at",{ascending:false}).limit(30),
     db.from("job_runs").select("job_name,status,started_at,finished_at,details").order("id",{ascending:false}).limit(20),
     db.from("site_checks").select("url,status_code,ok,duration_ms,canonical,notes,checked_at").order("checked_at",{ascending:false}).limit(12),
-    db.from("authority_search_queries").select("category,query,priority,last_run_at,enabled").eq("enabled",true).order("priority",{ascending:false}).limit(20)
+    db.from("authority_search_queries").select("category,query,priority,last_run_at,enabled").eq("enabled",true).order("priority",{ascending:false}).limit(20),
+    db.from("mentions").select("entity_name,source_title,source_domain,mention_type,has_link,target_url,authority_score,status,source_url,last_seen_at").order("authority_score",{ascending:false}).order("last_seen_at",{ascending:false}).limit(30),
+    db.from("meeting_briefs").select("id,title,starts_at,attendees,status,brief,updated_at").order("starts_at",{ascending:true}).limit(12),
+    db.from("contacts").select("id,name,email,role,metadata,organization_id").order("updated_at",{ascending:false}).limit(30),
+    db.from("search_metrics").select("clicks,impressions,ctr,position,metric_date").gte("metric_date",new Date(Date.now()-28*86400000).toISOString().slice(0,10))
   ]);
 
   const approvalTargets=(approvalRows.data??[]).map((a:any)=>a.target_id).filter(Boolean);
@@ -103,7 +107,20 @@ async function dashboardData(){
     outreach:recentOutreach.data??[],
     jobs:jobs.data??[],
     site:site.data??[],
-    searches:searches.data??[]
+    searches:searches.data??[],
+    mentions:mentions.data??[],
+    meetings:meetings.data??[],
+    relationships:(relationships.data??[]).map((x:any)=>({
+      id:x.id,name:x.name,email:x.email,role:x.role,
+      relationship_score:Number(x.metadata?.relationship_score??0),
+      relationship_updated_at:x.metadata?.relationship_updated_at??null
+    })).sort((a:any,b:any)=>b.relationship_score-a.relationship_score),
+    search_summary:(searchTotals.data??[]).reduce((acc:any,row:any)=>{
+      acc.clicks+=Number(row.clicks??0);
+      acc.impressions+=Number(row.impressions??0);
+      acc.positions.push(Number(row.position??0));
+      return acc;
+    },{clicks:0,impressions:0,positions:[]})
   };
 }
 
@@ -144,6 +161,10 @@ button{background:#213047;color:white;border:1px solid #3a4e68;border-radius:8px
   <div class="panel"><h2>Recent outreach</h2><div id="outreach"></div></div>
   <div class="panel"><h2>Automation health</h2><div id="jobs"></div></div>
   <div class="panel"><h2>Website health</h2><div id="site"></div></div>
+  <div class="panel"><h2>Mentions & backlink opportunities</h2><div id="mentions"></div></div>
+  <div class="panel"><h2>Relationship intelligence</h2><div id="relationships"></div></div>
+  <div class="panel"><h2>Meeting briefs</h2><div id="meetings"></div></div>
+  <div class="panel"><h2>Search visibility</h2><div id="searchmetrics"></div></div>
   <div class="panel"><h2>Discovery coverage</h2><div id="searches"></div></div>
 </div>
 <script>
@@ -174,6 +195,11 @@ async function refresh(){
   document.getElementById("outreach").innerHTML=table(["Recipient","Subject","State","Sent / reply"],d.outreach.map(x=>'<tr><td>'+esc(x.recipient_email||"")+'</td><td>'+esc(x.subject||"")+'</td><td>'+esc(x.last_delivery_event||x.status)+'</td><td>'+esc(x.sent_at?new Date(x.sent_at).toLocaleString():"")+(x.reply_received_at?'<br><span class="good">Reply '+esc(new Date(x.reply_received_at).toLocaleString())+'</span>':"")+'</td></tr>'));
   document.getElementById("jobs").innerHTML=table(["Job","State","Finished","Details"],d.jobs.map(j=>'<tr><td>'+esc(j.job_name)+'</td><td class="'+(j.status==="ok"?"good":j.status==="warning"?"warn":"")+'">'+esc(j.status)+'</td><td>'+esc(j.finished_at?new Date(j.finished_at).toLocaleString():"running")+'</td><td><code>'+esc(JSON.stringify(j.details||{}))+'</code></td></tr>'));
   document.getElementById("site").innerHTML=table(["URL","HTTP","State","ms"],d.site.map(s=>'<tr><td>'+esc(s.url)+'</td><td>'+esc(s.status_code??"")+'</td><td class="'+(s.ok?"good":"bad")+'">'+(s.ok?"OK":"FAIL")+'</td><td>'+esc(s.duration_ms??"")+'</td></tr>'));
+  document.getElementById("mentions").innerHTML=d.mentions.length?table(["Score","Mention","Domain","Link"],d.mentions.map(m=>'<tr><td class="score">'+esc(m.authority_score??"")+'</td><td><a href="'+esc(m.source_url)+'" target="_blank" rel="noreferrer">'+esc(m.source_title||m.source_url)+'</a><br><span class="pill">'+esc(m.mention_type)+'</span></td><td>'+esc(m.source_domain||"")+'</td><td class="'+(m.has_link?"good":"warn")+'">'+(m.has_link?"Linked":"Unlinked")+'</td></tr>')):'<div class="sub">No monitored mentions yet.</div>';
+  document.getElementById("relationships").innerHTML=d.relationships.length?table(["Score","Contact","Role","Email"],d.relationships.slice(0,20).map(r=>'<tr><td class="score">'+esc(r.relationship_score)+'</td><td>'+esc(r.name)+'</td><td>'+esc(r.role||"")+'</td><td>'+esc(r.email||"")+'</td></tr>')):'<div class="sub">Relationship scores will appear as conversations develop.</div>';
+  document.getElementById("meetings").innerHTML=d.meetings.length?table(["When","Meeting","Status","Objective"],d.meetings.map(m=>'<tr><td>'+esc(m.starts_at?new Date(m.starts_at).toLocaleString():"")+'</td><td>'+esc(m.title)+'</td><td>'+esc(m.status)+'</td><td>'+esc(m.brief?.objective||"")+'</td></tr>')):'<div class="sub">No meeting briefs prepared yet.</div>';
+  const sm=d.search_summary||{clicks:0,impressions:0,positions:[]}; const avg=sm.positions?.length?(sm.positions.reduce((a,b)=>a+b,0)/sm.positions.length).toFixed(1):"—";
+  document.getElementById("searchmetrics").innerHTML='<div class="grid" style="grid-template-columns:repeat(3,minmax(120px,1fr));margin:0"><div class="card"><div class="n">'+esc(sm.clicks)+'</div><div class="label">Clicks / 28d</div></div><div class="card"><div class="n">'+esc(sm.impressions)+'</div><div class="label">Impressions / 28d</div></div><div class="card"><div class="n">'+esc(avg)+'</div><div class="label">Avg position</div></div></div>';
   document.getElementById("searches").innerHTML=table(["Category","Query","Priority","Last run"],d.searches.map(s=>'<tr><td>'+esc(s.category)+'</td><td>'+esc(s.query)+'</td><td>'+esc(s.priority)+'</td><td>'+esc(s.last_run_at?new Date(s.last_run_at).toLocaleString():"Never")+'</td></tr>'));
 }
 if(K){login()}
