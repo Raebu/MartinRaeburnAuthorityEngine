@@ -240,17 +240,39 @@ Separate unknowns clearly. Focus on relationship context, useful talking points,
     false
   );
 
-  const {data:saved,error}=await db.from("meeting_briefs").upsert({
-    external_event_id:body.external_event_id??null,
-    title:String(body.title),
-    starts_at:body.starts_at??null,
-    attendees,
-    source:body.source??"api",
-    brief,
-    status:"prepared",
-    updated_at:new Date().toISOString()
-  },{onConflict:"external_event_id"}).select("id").single();
-  if(error)throw error;
+  let saved:any=null;
+  if(body.external_event_id){
+    const {data:existing,error:findError}=await db.from("meeting_briefs")
+      .select("id").eq("external_event_id",String(body.external_event_id)).maybeSingle();
+    if(findError)throw findError;
+    if(existing?.id){
+      const {data:updated,error:updateError}=await db.from("meeting_briefs").update({
+        title:String(body.title),
+        starts_at:body.starts_at??null,
+        attendees,
+        source:body.source??"api",
+        brief,
+        status:"prepared",
+        updated_at:new Date().toISOString()
+      }).eq("id",existing.id).select("id").single();
+      if(updateError)throw updateError;
+      saved=updated;
+    }
+  }
+  if(!saved){
+    const {data:inserted,error:insertError}=await db.from("meeting_briefs").insert({
+      external_event_id:body.external_event_id??null,
+      title:String(body.title),
+      starts_at:body.starts_at??null,
+      attendees,
+      source:body.source??"api",
+      brief,
+      status:"prepared",
+      updated_at:new Date().toISOString()
+    }).select("id").single();
+    if(insertError)throw insertError;
+    saved=inserted;
+  }
   return json({id:saved.id,brief},201);
 }
 
