@@ -278,6 +278,140 @@ async function ingestSearchMetrics(body:any){
   return json({written},201);
 }
 
+
+async function runFunnelMetrics(){
+  const {data:run}=await db.from("job_runs").insert({job_name:"authority-funnel-metrics",status:"running"}).select("id").single();
+  const since30=new Date(Date.now()-30*86400000).toISOString();
+
+  const [
+    discovered,qualified,awaiting,sent,replied,contacts,mentions,linkedMentions,unlinkedMentions
+  ]=await Promise.all([
+    db.from("opportunities").select("*",{count:"exact",head:true}).gte("created_at",since30),
+    db.from("opportunities").select("*",{count:"exact",head:true}).in("status",["qualified","awaiting_approval","replied"]).gte("created_at",since30),
+    db.from("opportunities").select("*",{count:"exact",head:true}).eq("status","awaiting_approval").gte("created_at",since30),
+    db.from("outreach").select("*",{count:"exact",head:true}).eq("status","sent").gte("sent_at",since30),
+    db.from("outreach").select("*",{count:"exact",head:true}).not("reply_received_at","is",null).gte("reply_received_at",since30),
+    db.from("contacts").select("*",{count:"exact",head:true}).gte("created_at",since30),
+    db.from("mentions").select("*",{count:"exact",head:true}).gte("first_seen_at",since30),
+    db.from("mentions").select("*",{count:"exact",head:true}).eq("has_link",true).gte("first_seen_at",since30),
+    db.from("mentions").select("*",{count:"exact",head:true}).eq("has_link",false).gte("first_seen_at",since30)
+  ]);
+
+  const discoveredN=discovered.count??0;
+  const qualifiedN=qualified.count??0;
+  const sentN=sent.count??0;
+  const repliedN=replied.count??0;
+  const now=new Date().toISOString();
+
+  const rows=[
+    ["opportunities_discovered_30d",null,discoveredN],
+    ["opportunities_qualified_30d",null,qualifiedN],
+    ["opportunities_awaiting_approval_30d",null,awaiting.count??0],
+    ["contacts_verified_30d",null,contacts.count??0],
+    ["outreach_sent_30d",null,sentN],
+    ["replies_30d",null,repliedN],
+    ["qualification_rate_30d",null,discoveredN?qualifiedN/discoveredN:0],
+    ["reply_rate_30d",null,sentN?repliedN/sentN:0],
+    ["mentions_30d",null,mentions.count??0],
+    ["linked_mentions_30d",null,linkedMentions.count??0],
+    ["unlinked_mentions_30d",null,unlinkedMentions.count??0]
+  ];
+
+  for(const [metric,dimension,value] of rows){
+    await db.from("authority_metrics").insert({
+      metric,dimension,value:Number(value),measured_at:now,metadata:{window_days:30}
+    });
+  }
+
+  const {data:sourceRows}=await db.from("opportunities")
+    .select("source_name,status")
+    .gte("created_at",since30)
+    .not("source_name","is",null);
+
+  const grouped:Record<string,{total:number,qualified:number}>={};
+  for(const row of sourceRows??[]){
+    const key=String(row.source_name);
+    grouped[key]??={total:0,qualified:0};
+    grouped[key].total++;
+    if(["qualified","awaiting_approval","replied"].includes(String(row.status)))grouped[key].qualified++;
+  }
+  for(const [source,v] of Object.entries(grouped)){
+    if(v.total<2)continue;
+    await db.from("authority_metrics").insert({
+      metric:"source_qualification_rate_30d",
+      dimension:source,
+      value:v.qualified/v.total,
+      measured_at:now,
+      metadata:{total:v.total,qualified:v.qualified}
+    });
+  }
+
+  await db.from("job_runs").update({
+    status:"ok",finished_at:new Date().toISOString(),
+    details:{discovered:discoveredN,qualified:qualifiedN,sent:sentN,replied:repliedN}
+  }).eq("id",run.id);
+
+  return{discovered:discoveredN,qualified:qualifiedN,sent:sentN,replied:repliedN};
+}
+
+async function runOpportunityRevalidation(){
+  const {data:run}=await db.from("job_runs").insert({job_name:"opportunity-revalidation",status:"running"}).select("id").single();
+  const {data:items,error}=await db.from("opportunities")
+    .select("id,title,source_url,deadline,status,raw_data")
+    .in("status",["new","qualified","review","awaiting_approval"])
+    .not("source_url","is",null)
+    .order("score",{ascending:false})
+    .limit(30);
+  if(error)throw error;
+
+  let healthy=0,expired=0,unavailable=0,failed=0;
+  for(const item of items??[]){
+    try{
+      if(item.deadline&&new Date(item.deadline).valueOf()<Date.now()){
+        await db.from("opportunities").update({
+          status:"expired",
+          raw_data:{...(item.raw_data??{}),revalidation:{state:"deadline_passed",checked_at:new Date().toISOString()}},
+          updated_at:new Date().toISOString()
+        }).eq("id",item.id);
+        expired++;
+        continue;
+      }
+      const url=String(item.source_url);
+      if(!safePublicUrl(url)){failed++;continue}
+      const response=await fetch(url,{
+        method:"GET",redirect:"follow",signal:AbortSignal.timeout(15000),
+        headers:{"user-agent":"MartinRaeburnAuthorityEngine/1.4"}
+      });
+      if(response.status===404||response.status===410){
+        await db.from("opportunities").update({
+          status:"source_unavailable",
+          raw_data:{...(item.raw_data??{}),revalidation:{state:"unavailable",http_status:response.status,checked_at:new Date().toISOString()}},
+          updated_at:new Date().toISOString()
+        }).eq("id",item.id);
+        unavailable++;
+      }else if(response.ok){
+        await db.from("opportunities").update({
+          raw_data:{...(item.raw_data??{}),revalidation:{state:"healthy",http_status:response.status,checked_at:new Date().toISOString()}},
+          updated_at:new Date().toISOString()
+        }).eq("id",item.id);
+        healthy++;
+      }else{
+        failed++;
+      }
+    }catch{
+      failed++;
+    }
+  }
+
+  await db.from("job_runs").update({
+    status:failed?"warning":"ok",
+    finished_at:new Date().toISOString(),
+    details:{processed:(items??[]).length,healthy,expired,unavailable,failed}
+  }).eq("id",run.id);
+
+  return{processed:(items??[]).length,healthy,expired,unavailable,failed};
+}
+
 Deno.serve(async(req:Request)=>{
   if(req.method==="GET")return json({ok:true,service:"authority-intelligence"});
   if(!(await authorised(req)))return json({error:"unauthorized"},401);
@@ -286,6 +420,8 @@ Deno.serve(async(req:Request)=>{
   try{
     if(body.action==="mentions")return json(await runMentions());
     if(body.action==="relationship-refresh")return json(await runRelationshipRefresh());
+    if(body.action==="funnel-metrics")return json(await runFunnelMetrics());
+    if(body.action==="revalidate-opportunities")return json(await runOpportunityRevalidation());
     if(body.action==="meeting-brief")return await prepareMeetingBrief(body);
     if(body.action==="search-console-ingest")return await ingestSearchMetrics(body);
     return json({error:"unknown action"},400);
