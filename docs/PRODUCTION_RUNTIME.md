@@ -89,3 +89,42 @@ Current automatic reactions:
 - all received provider events are stored in `email_events` for traceability
 
 The webhook signature verifier was tested using a signed synthetic event. A synthetic reply test also confirmed that a pending follow-up is automatically completed when a reply is detected; test records were then removed from production data.
+
+
+## Contact discovery and automatic follow-ups
+
+The production `authority-automation` Edge Function now runs two additional operational loops.
+
+### Contact discovery
+
+Every six hours the engine inspects the highest-scoring qualified opportunities that have not yet entered outreach. It uses OpenAI web search to locate a public professional decision-maker contact relevant to the opportunity.
+
+A discovered email is accepted only when:
+- it is syntactically valid
+- it is a publicly published professional address
+- the AI returns a source URL and sufficiently high confidence
+- the engine independently fetches that source URL and confirms the exact email is actually present
+- the address is not suppressed
+
+The engine never guesses email patterns. Verified contacts are written to the relationship store and a personalised first-contact draft plus approval request is prepared automatically. First unsolicited contact remains approval-gated.
+
+### Automatic follow-ups
+
+The follow-up runner executes hourly. When a previously approved and successfully sent first-contact email reaches its due date, the engine:
+- checks that no reply has been received
+- checks suppression state
+- checks that no follow-up already exists
+- creates one concise AI-generated follow-up
+- authorises it under the single-follow-up automation policy
+- sends it through the hardened Authority API path
+
+The database permits only one follow-up per original outreach. Follow-ups are exempt from the new-contact cooling period only when their parent outreach is a valid sent message to the same recipient. Global hourly/daily send limits still apply.
+
+Replies and delivery problems continue to cancel pending follow-ups immediately through the Resend event webhook.
+
+### Schedules
+
+- contact discovery: every six hours at minute 23
+- follow-up execution: hourly at minute 11
+
+The initial production contact-discovery run completed safely: five qualified opportunities were researched, but none met the strict public-email verification threshold, so no first-contact drafts were created. This is intentional fail-closed behaviour rather than guessing contact details.
