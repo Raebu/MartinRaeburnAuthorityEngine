@@ -51,3 +51,14 @@ A linked Vercel project exists for the future private command centre / server-si
 - Project ID: `prj_2B7u35zRuLuZtDyl0t9TiVOtQl67`
 
 The current Vercel connection does not have permission to write project environment variables, so no secrets are configured there yet.
+
+
+## Outbound production hardening
+
+The first-contact send path now uses a database-level reservation before contacting Resend. This makes hourly/daily caps, approval state, suppression state and recipient cooling-off checks atomic across concurrent workers.
+
+Each outreach uses a stable Resend idempotency key derived from its outreach ID, so a retry after an ambiguous network timeout cannot create a duplicate delivery.
+
+Recipient addresses are validated before drafts are persisted. Suppression matching is case-insensitive. Existing contact-linked drafts are backfilled with recipient addresses where possible.
+
+After provider acceptance, the engine checks that sent state was persisted before returning success. Database/control-plane failures fail closed rather than authorising additional sends.
