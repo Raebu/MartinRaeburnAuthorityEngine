@@ -445,6 +445,155 @@ This is the only automatic follow-up; make it easy for the recipient to ignore o
   return{processed:(due??[]).length,sent,stopped,failed};
 }
 
+
+const webOpportunitySchema={
+  type:"object",
+  additionalProperties:false,
+  properties:{
+    opportunities:{
+      type:"array",
+      maxItems:6,
+      items:{
+        type:"object",
+        additionalProperties:false,
+        properties:{
+          title:{type:"string"},
+          kind:{type:"string",enum:["speaking","media","podcast","university","association","awards","advisory","partnership"]},
+          organization:{type:"string"},
+          source_url:{type:"string"},
+          summary:{type:"string"},
+          location:{type:"string"},
+          deadline:{type:"string"},
+          event_date:{type:"string"},
+          score:{type:"integer",minimum:0,maximum:100},
+          fit_reason:{type:"string"}
+        },
+        required:["title","kind","organization","source_url","summary","location","deadline","event_date","score","fit_reason"]
+      }
+    }
+  },
+  required:["opportunities"]
+};
+
+async function verifyOpportunitySource(sourceUrl:string,title:string){
+  if(!safePublicUrl(sourceUrl))return false;
+  const response=await fetch(sourceUrl,{
+    redirect:"follow",
+    signal:AbortSignal.timeout(15000),
+    headers:{"user-agent":"MartinRaeburnAuthorityEngine/1.3"}
+  });
+  if(!response.ok)return false;
+  const body=(await response.text()).toLowerCase();
+  const words=title.toLowerCase().split(/\W+/).filter((x:string)=>x.length>=5).slice(0,6);
+  return words.length===0?true:words.some((w:string)=>body.includes(w));
+}
+
+async function runWebDiscovery(){
+  const policy=await setting("web_discovery_policy")??{
+    enabled:true,queries_per_run:4,results_per_query:6,minimum_score:72,max_page_age_days:365
+  };
+  if(policy.enabled===false)return{disabled:true};
+
+  const {data:run,error:runError}=await db.from("job_runs")
+    .insert({job_name:"web-opportunity-discovery",status:"running"})
+    .select("id").single();
+  if(runError)throw runError;
+
+  const {data:queries,error}=await db.from("authority_search_queries")
+    .select("*")
+    .eq("enabled",true)
+    .order("last_run_at",{ascending:true,nullsFirst:true})
+    .order("priority",{ascending:false})
+    .limit(Number(policy.queries_per_run??4));
+  if(error)throw error;
+
+  let discovered=0,skipped=0,failed=0;
+
+  for(const row of queries??[]){
+    try{
+      const result=await openaiStructured(
+        "authority_opportunity_web_search",
+        webOpportunitySchema,
+        `Search the public web for CURRENT, ACTIONABLE opportunities matching the supplied query.
+Return only real opportunities with a public source page that a person could act on now or for a future announced date.
+Prioritise open calls for speakers, panels, expert commentary, podcast guests, university guest speakers, trade-association events, awards/nominations, advisory roles and strategic partnership/mentor programmes.
+Do not return generic news articles, old event recaps, closed opportunities, directories with no current opportunity, or speculative claims.
+source_url must be the original organiser/publisher page whenever possible, not a search result or aggregator.
+Scores should reflect relevance to practical AI, automation, business building, technology leadership, transformation, recruitment and entrepreneurship in the UK.
+Use an empty string when deadline/event_date/location is unknown rather than inventing it.`,
+        {query:row.query,category:row.category,current_date:new Date().toISOString().slice(0,10)},
+        true
+      );
+
+      for(const item of result.opportunities??[]){
+        const sourceUrl=String(item.source_url??"").trim();
+        const score=Number(item.score??0);
+        if(score<Number(policy.minimum_score??72)||!sourceUrl||!(await verifyOpportunitySource(sourceUrl,String(item.title??"")))){
+          skipped++;
+          continue;
+        }
+
+        const deadlineRaw=String(item.deadline??"").trim();
+        const eventRaw=String(item.event_date??"").trim();
+        let deadline:string|null=null,eventDate:string|null=null;
+        if(deadlineRaw){
+          const d=new Date(deadlineRaw);
+          if(!Number.isNaN(d.valueOf()))deadline=d.toISOString();
+        }
+        if(eventRaw){
+          const d=new Date(eventRaw);
+          if(!Number.isNaN(d.valueOf()))eventDate=d.toISOString();
+        }
+        if(deadline&&new Date(deadline).valueOf()<Date.now()-86400000){
+          skipped++;
+          continue;
+        }
+
+        const {error:upsertError}=await db.from("opportunities").upsert({
+          kind:String(item.kind??row.category),
+          title:String(item.title??"").trim(),
+          source_url:sourceUrl,
+          source_name:String(item.organization??"").trim()||new URL(sourceUrl).hostname,
+          summary:String(item.summary??"").trim(),
+          location:String(item.location??"").trim()||null,
+          deadline,
+          event_date:eventDate,
+          score,
+          fit_reason:String(item.fit_reason??"").trim(),
+          owner_scope:"martin",
+          status:"new",
+          raw_data:{
+            discovery_mode:"openai-web-search",
+            query:row.query,
+            category:row.category,
+            verified_source:true
+          },
+          updated_at:new Date().toISOString()
+        },{onConflict:"source_url"});
+        if(!upsertError)discovered++; else failed++;
+      }
+
+      await db.from("authority_search_queries")
+        .update({last_run_at:new Date().toISOString()})
+        .eq("id",row.id);
+    }catch(e){
+      failed++;
+      await audit("web_discovery.failed","search_query",row.id,{
+        query:row.query,
+        error:e instanceof Error?e.message:String(e)
+      });
+    }
+  }
+
+  await db.from("job_runs").update({
+    status:failed?"warning":"ok",
+    finished_at:new Date().toISOString(),
+    details:{queries:(queries??[]).length,discovered,skipped,failed}
+  }).eq("id",run.id);
+
+  return{queries:(queries??[]).length,discovered,skipped,failed};
+}
+
 Deno.serve(async(req:Request)=>{
   if(req.method==="GET")return json({ok:true,service:"authority-automation"});
   if(req.method!=="POST")return json({error:"method not allowed"},405);
@@ -454,6 +603,7 @@ Deno.serve(async(req:Request)=>{
   try{body=await req.json()}catch{}
 
   try{
+    if(body.action==="web-discovery")return json(await runWebDiscovery());
     if(body.action==="contact-discovery")return json(await runContactDiscovery());
     if(body.action==="followups")return json(await runFollowups());
     return json({error:"unknown action"},400);

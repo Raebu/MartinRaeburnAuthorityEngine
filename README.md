@@ -9,7 +9,7 @@ This repository intentionally **does not implement editorial/article generation*
 ### Implemented foundation
 
 - speaking / event / media / strategic opportunity store and scoring
-- feed-based opportunity discovery
+- feed-based and AI web-search opportunity discovery
 - AI-assisted inbound classification
 - AI-assisted, approval-gated outreach drafting
 - outbound suppression handling
@@ -18,7 +18,7 @@ This repository intentionally **does not implement editorial/article generation*
 - organisation/contact relationship model
 - martinraeburn.com site-health checks
 - job/audit logs
-- private dashboard summary API
+- private dashboard summary API and command centre
 - singleton workers via PostgreSQL advisory locks
 - Docker development/runtime setup
 - CI validation
@@ -105,8 +105,7 @@ The public website remains independent: Authority Engine failures should not tak
 
 The data model/API foundation is deliberately ready for:
 
-- conference and speaker-source adapters
-- podcast/media/journalist discovery
+- additional first-party conference / media source adapters
 - strategic relationship discovery
 - Search Console intelligence
 - backlink / mention monitoring

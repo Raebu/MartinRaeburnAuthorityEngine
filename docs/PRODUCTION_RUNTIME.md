@@ -128,3 +128,42 @@ Replies and delivery problems continue to cancel pending follow-ups immediately 
 - follow-up execution: hourly at minute 11
 
 The initial production contact-discovery run completed safely: five qualified opportunities were researched, but none met the strict public-email verification threshold, so no first-contact drafts were created. This is intentional fail-closed behaviour rather than guessing contact details.
+
+
+## Expanded opportunity discovery
+
+A dedicated web-search discovery loop now runs every three hours using a rotating catalogue of high-value searches across:
+- UK speaking and keynote calls
+- AI / automation / transformation conferences
+- journalist and expert-comment requests
+- podcasts seeking guests
+- university guest-speaker opportunities
+- trade associations and chambers
+- awards and nominations
+- advisory / NED opportunities
+- accelerator / mentor / partnership programmes
+
+The engine validates each candidate against the source page before storing it. Generic news, recaps, stale opportunities and low-scoring matches are discarded.
+
+The first production run immediately found multiple current UK opportunities including AI Summit London, Tech Show London, CTO Craft Con Europe, Experts Live UK and Civo Navigate London.
+
+## Private command centre
+
+A private command centre is deployed at:
+
+`https://pmymiwqrinhaxktfmlhm.supabase.co/functions/v1/authority-console`
+
+The page itself contains no operational data until authenticated. The access credential is separate from the Authority API credential, and only its SHA-256 digest is stored in application settings.
+
+The command centre shows:
+- live opportunity counts
+- qualified / awaiting-approval work
+- emails sent and replies
+- website-health failures
+- pending outreach approvals
+- highest-value opportunities
+- recent outreach and delivery/reply state
+- automation/job health
+- discovery coverage
+
+For pending outreach, Martin can explicitly **Approve & send** or **Reject** from the command centre. Approve & send uses the same hardened production Authority API, so suppression, idempotency, rate limits and recipient cooling rules still apply.
