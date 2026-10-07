@@ -33,7 +33,7 @@ export async function runDiscovery() {
         const parsed=parser.parse(await r.text());
         for (const item of itemsFromFeed(parsed).slice(0,50)) {
           const title=text(item.title).trim();
-          const url=link(item.link) ?? text(item.guid).trim() || undefined;
+          const url=link(item.link) ?? (text(item.guid).trim() || undefined);
           const summary=text(item.description || item.summary || item.content).replace(/<[^>]+>/g," ").replace(/\s+/g," ").trim();
           if (!title || !url) continue;
           await createOpportunity({kind:"discovered",title,sourceUrl:url,sourceName:feed,summary,rawData:item});
